@@ -1,0 +1,6 @@
+foldwise
+Copyright 2026 Andrew Peltekci
+
+This product includes a training loop adapted from the laya fine-tuning notebook
+(https://github.com/NandhaKishorM/laya, Apache License 2.0) and runs laya checkpoints
+published by Convai Innovations (https://huggingface.co/convaiinnovations/laya).
