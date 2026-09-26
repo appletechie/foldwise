@@ -162,3 +162,11 @@ def dedupe_command(
     show(p)
     console.print("Preview only. Run [bold]foldwise apply[/], check the review folder, then "
                   "[bold]foldwise dedupe --purge[/].")
+
+
+@app.command()
+def status():
+    """Dashboard: folders, what is waiting, the last plan, move history, models."""
+    from .tui.status import render
+
+    render(load_cfg(), console)
