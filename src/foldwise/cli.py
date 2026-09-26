@@ -6,7 +6,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
-from . import config, dedupe, inventory, mover, paths
+from . import agent, config, dedupe, inventory, mover, paths
 from . import plan as plans
 from .bootstrap import init_config, tilde
 from .config import Config, expand
@@ -185,24 +185,56 @@ def finish_review(cfg: Config, moves: list, new_rules: list) -> None:
 
 
 def held_items() -> list:
-    pp = plans.latest(paths.sub("plans"), "sort")
-    if pp is None:
-        return []
-    return [i for i in plans.load(pp).items if i.action == "hold" and Path(i.src).exists()]
+    return agent.held_items()
 
 
 @app.command()
 def review(
     llm: str = typer.Option(None, help="ollama, lmstudio or openai (settings under `llm:` in taxonomy.yaml)"),
     images: bool = typer.Option(False, help="Also send images (vision models only)"),
+    export: Path = typer.Option(None, "--export", help="Write held files as JSON for a coding agent"),
+    import_: Path = typer.Option(None, "--import", help="Read a coding agent's answers and build a plan"),
 ):
-    """Choose folders for held files, by hand or with a local model's suggestions; answers can become rules."""
+    """Choose folders for held files: by hand, with a local model, or with your coding agent."""
+    import json
+
+    from .cache import Cache
     from .tui.review import interactive, llm_review
 
     cfg = load_cfg()
+    if import_:
+        try:
+            answers = json.loads(import_.read_text())
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
+            console.print(f"[red]{escape(import_.name)} is not valid JSON ({e}); the agent must echo the "
+                          "`export_id` from its export file.[/]")
+            raise typer.Exit(1) from e
+        try:
+            # Prefer the export the answers were built from; fall back to the latest export.
+            payload = agent.load_export(answers.get("export_id"))
+        except (FileNotFoundError, ValueError) as e:
+            console.print(str(e))
+            raise typer.Exit(1) from e
+        moves, problems = agent.import_suggestions(cfg, payload, answers)
+        for problem in problems:
+            console.print(f"[yellow]ignored[/] {escape(problem)}")
+        finish_review(cfg, moves, [])
+        return
     held = held_items()
     if not held:
         console.print("Nothing held. Run foldwise sort first.")
+        return
+    if export:
+        cache = Cache(paths.sub("cache") / "extract.jsonl")
+        try:
+            payload = agent.held_payload(cfg, held, cache.read)
+        finally:
+            cache.close()
+        agent.save_export(payload)
+        export.write_text(json.dumps(payload, indent=1, ensure_ascii=False))
+        console.print(f"Wrote {len(payload['files'])} held files to {export} "
+                      f"({len(payload['withheld'])} withheld: they contain credentials).")
+        console.print("Give that file to your coding agent, then run: foldwise review --import <answers.json>")
         return
 
     def ask(q: str) -> str:
@@ -211,7 +243,6 @@ def review(
     if not llm:
         moves, new_rules = interactive(held, cfg, ask, console)
     else:
-        from .cache import Cache
         from .llm.base import LLMError, get_provider
 
         cache = Cache(paths.sub("cache") / "extract.jsonl")
