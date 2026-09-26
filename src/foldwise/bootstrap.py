@@ -28,7 +28,7 @@ def _subdirs(d: Path) -> list[Path]:
 
 def describe(d: Path, sample: int = 8) -> str:
     names: list[str] = []
-    for dirpath, dirnames, filenames in os.walk(d):
+    for _, dirnames, filenames in os.walk(d):
         dirnames[:] = sorted(x for x in dirnames if not x.startswith(".") and x not in PRUNE)
         names += [Path(n).stem for n in sorted(filenames) if not n.startswith(".")]
         if len(names) >= sample:

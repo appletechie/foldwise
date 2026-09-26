@@ -30,7 +30,8 @@ def test_state_and_question_shapes():
     assert model.state_for("a.pdf", Extracted("text", "meta")) == {"filename": "a.pdf", "metadata": "meta",
                                                                     "content": "text"}
     q = model.question(TREE["~/Docs/Areas"].children)
-    assert q["c"]["type"] == "choice" and q["c"]["criteria"] == {"~/Docs/Areas/Tax": "tax", "~/Docs/Areas/Legal": "legal"}
+    assert q["c"]["type"] == "choice"
+    assert q["c"]["criteria"] == {"~/Docs/Areas/Tax": "tax", "~/Docs/Areas/Legal": "legal"}
 
 
 def test_agreeing_models_reach_a_leaf():

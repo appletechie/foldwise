@@ -9,7 +9,7 @@ from .inventory import filed_files
 
 TOKEN = re.compile(r"[a-z]{4,}")
 STOPWORDS = {"copy", "final", "draft", "image", "file", "document", "untitled", "screenshot", "scan", "edited",
-             "version", "report", "notes", "export", "download", "file", "page"}
+             "version", "report", "notes", "export", "download", "page"}
 
 
 def matches(rule: Rule, name: str, text: str) -> bool:
