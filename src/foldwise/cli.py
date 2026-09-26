@@ -263,3 +263,100 @@ def mcp():
     from .mcp_server import server
 
     server.run()
+
+
+HEAD_MAX_LEN = 256
+
+
+@app.command()
+def train(
+    base: str = typer.Option("english", help="english (default) or multilingual"),
+    force: bool = typer.Option(False, help="Train even without a GPU (takes many hours)"),
+):
+    """Fine-tune laya on your filed tree; keeps the new model plus the previous one as the ensemble."""
+    import fcntl
+    import json
+    import os
+    import random
+    from datetime import datetime
+
+    from .cache import Cache
+    from .model import load_models, state_for
+    from .train import dataset, loop
+    from .train.evaluate import evaluate
+
+    cfg = load_cfg()
+    lock = (paths.state_dir() / "train.lock").open("w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        console.print("Another training run is in progress.")
+        raise typer.Exit(1) from None
+    try:
+        import torch
+        from huggingface_hub import snapshot_download
+        from laya import Agent
+        from laya.agent import _fix_tokenizer_config
+        from transformers import AutoTokenizer
+
+        device = "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
+        if device == "cpu" and not force:
+            console.print("No GPU found; training on CPU takes many hours. Pass --force to try anyway.")
+            raise typer.Exit(1)
+        ram_gb = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
+        micro_batch = 4 if ram_gb < 48 else 8
+        rng = random.Random(20260925)
+        patterns = ["encoder/*", "tokenizer/*", "*.json", "*.safetensors"] + (["multilingual/*"]
+                                                                              if base == "multilingual" else [])
+        snap = Path(snapshot_download("convaiinnovations/laya", allow_patterns=patterns))
+        base_dir = snap / "multilingual" if base == "multilingual" else snap
+        _fix_tokenizer_config(str(base_dir))
+        tok = AutoTokenizer.from_pretrained(str(base_dir / "tokenizer"))
+        model_cfg = json.loads((base_dir / "rl_agent_config.json").read_text()) | {"head_max_len": HEAD_MAX_LEN}
+
+        files = dataset.gather(cfg, rng)
+        train_files, test_files = dataset.frozen_split(files, cfg.tree, paths.state_dir() / "test_set.json", rng)
+        console.print(f"{len(train_files)} training files, {len(test_files)} in the frozen test set; "
+                      f"largest folders: {dataset.balance(train_files, cfg.tree).most_common(5)}")
+        cache = Cache(paths.sub("cache") / "extract.jsonl")
+        sensitive_dir = expand(cfg.sensitive_dest)
+        states = {}
+        for f in sorted(set(train_files) | set(test_files)):
+            ex = cache.read(f)
+            states[f] = state_for(f.name, ex)
+            if ex.sensitive or f.is_relative_to(sensitive_dir):
+                states[f]["content"] = ""  # never train on credential text
+        cache.close()
+        items = dataset.items_for(dataset.training_states(train_files, states, cfg.tree, rng), cfg.tree, tok,
+                                  model_cfg["max_len"], model_cfg["head_max_len"])
+        rng.shuffle(items)
+        n_calib = max(10, len(items) // 10)
+        calib, items = items[:n_calib], items[n_calib:]
+        steps = -(-len(items) // micro_batch) * 3
+        console.print(f"{len(items)} decisions, {steps} steps on {device} (micro-batch {micro_batch}); "
+                      f"about {steps * 3.5 / 60:.0f} minutes at the 3.5 s/step measured on an M4 Pro")
+
+        def score(models, label):
+            r = evaluate(models, test_files, states, cfg.tree, cfg.policy.min_confidence if len(models) > 1
+                         else cfg.policy.min_confidence_single)
+            console.print(f"[{label}] accuracy {r['accuracy']:.1%}, auto-moves {r['auto_share']:.0%} "
+                          f"({r['auto_precision']:.1%} right), {r['coverage95']:.0%} at >=95% correct")
+
+        current = load_models(cfg.models, paths.sub("models"))
+        if current:
+            score(current, "current")
+        name = datetime.now().strftime("%Y%m%d-%H%M")
+        out = paths.sub("models") / name
+        loop.train_model(items, calib, base_dir, model_cfg, tok, device, out, rng, epochs=3,
+                         micro_batch=micro_batch, grad_accum=4, log=console.print)
+        new = Agent(str(out), device=device)
+        score([new], "new model alone")
+        previous = load_models(cfg.models[-1:], paths.sub("models"))
+        if previous:
+            score(previous + [new], "previous + new (the ensemble sort will use)")
+        cfg.models = cfg.models[-1:] + [name]
+        config.save(cfg, paths.config_file())
+        console.print(f"Models now: {cfg.models}. Edit `models:` in {paths.config_file()} to change the ensemble.")
+        console.print("Only previous + new are used; older timestamped models/ folders are safe to delete.")
+    finally:
+        lock.close()
