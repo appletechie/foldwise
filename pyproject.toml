@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Local-first file organizer that learns your folder tree"
 readme = "README.md"
 requires-python = ">=3.11"
-license = "Apache-2.0"
+license = "MIT"
 dependencies = [
     "laya>=0.3.20,<0.4",
     "mcp>=2.2,<3",
