@@ -192,14 +192,35 @@ def held_items() -> list:
 
 
 @app.command()
-def review():
-    """Choose folders for held files; answers can become rules."""
-    from .tui.review import interactive
+def review(
+    llm: str = typer.Option(None, help="ollama, lmstudio or openai (settings under `llm:` in taxonomy.yaml)"),
+    images: bool = typer.Option(False, help="Also send images (vision models only)"),
+):
+    """Choose folders for held files, by hand or with a local model's suggestions; answers can become rules."""
+    from .tui.review import interactive, llm_review
 
     cfg = load_cfg()
     held = held_items()
     if not held:
         console.print("Nothing held. Run foldwise sort first.")
         return
-    moves, new_rules = interactive(held, cfg, lambda q: typer.prompt(q, default="s", show_default=False), console)
+
+    def ask(q: str) -> str:
+        return typer.prompt(q, default="s", show_default=False)
+
+    if not llm:
+        moves, new_rules = interactive(held, cfg, ask, console)
+    else:
+        from .cache import Cache
+        from .llm.base import LLMError, get_provider
+
+        cache = Cache(paths.sub("cache") / "extract.jsonl")
+        try:
+            moves, new_rules = llm_review(held, cfg, get_provider(llm, cfg.llm), cache.read, images,
+                                          typer.confirm, ask, console)
+        except LLMError as e:
+            console.print(f"[red]{escape(str(e))}[/]")
+            raise typer.Exit(1) from e
+        finally:
+            cache.close()
     finish_review(cfg, moves, new_rules)
