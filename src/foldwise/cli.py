@@ -255,3 +255,11 @@ def review(
         finally:
             cache.close()
     finish_review(cfg, moves, new_rules)
+
+
+@app.command()
+def mcp():
+    """Run the MCP server over stdio for coding agents (Claude Code, Codex, Cursor, ...)."""
+    from .mcp_server import server
+
+    server.run()
