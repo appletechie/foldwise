@@ -170,3 +170,36 @@ def status():
     from .tui.status import render
 
     render(load_cfg(), console)
+
+
+def finish_review(cfg: Config, moves: list, new_rules: list) -> None:
+    if new_rules:
+        cfg.rules = new_rules + cfg.rules  # learned rules are specific, so they go first
+        config.save(cfg, paths.config_file())
+        console.print(f"Added {len(new_rules)} rules to {paths.config_file()}.")
+    if moves:
+        p = plans.Plan("review", moves)
+        plans.save(p, paths.sub("plans"))
+        show(p)
+        console.print("Run [bold]foldwise apply[/] to move them.")
+
+
+def held_items() -> list:
+    pp = plans.latest(paths.sub("plans"), "sort")
+    if pp is None:
+        return []
+    return [i for i in plans.load(pp).items if i.action == "hold" and Path(i.src).exists()]
+
+
+@app.command()
+def review():
+    """Choose folders for held files; answers can become rules."""
+    from .tui.review import interactive
+
+    cfg = load_cfg()
+    held = held_items()
+    if not held:
+        console.print("Nothing held. Run foldwise sort first.")
+        return
+    moves, new_rules = interactive(held, cfg, lambda q: typer.prompt(q, default="s", show_default=False), console)
+    finish_review(cfg, moves, new_rules)
