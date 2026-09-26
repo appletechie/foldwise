@@ -9,14 +9,32 @@ import pytest
 from foldwise import extract
 from foldwise.extract import base, text
 
-# Minimal one-page PDF with the text "Invoice 4411" (Helvetica), valid enough for pypdf and pdftotext.
-PDF = (b"%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
-       b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
-       b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 144]/Contents 4 0 R"
-       b"/Resources<</Font<</F1 5 0 R>>>>>>endobj\n"
-       b"4 0 obj<</Length 42>>stream\nBT /F1 18 Tf 20 60 Td (Invoice 4411) Tj ET\nendstream endobj\n"
-       b"5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n"
-       b"trailer<</Root 1 0 R>>\n%%EOF\n")
+
+# Minimal one-page PDF with the text "Invoice 4411" (Helvetica), built with a real xref table so
+# pypdf (the fallback when pdftotext is absent, as on CI runners) can parse it too.
+def _pdf_with_xref(objects: list[bytes]) -> bytes:
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for i, obj in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n".encode() + obj + b"\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n".encode() + b"0000000000 65535 f \n"
+    for off in offsets[1:]:
+        out += f"{off:010d} 00000 n \n".encode()
+    out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    return bytes(out)
+
+
+_CONTENT = b"BT /F1 18 Tf 20 60 Td (Invoice 4411) Tj ET\n"
+PDF = _pdf_with_xref([
+    b"<< /Type /Catalog /Pages 2 0 R >>",
+    b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144] /Contents 4 0 R"
+    b" /Resources << /Font << /F1 5 0 R >> >> >>",
+    b"<< /Length %d >>\nstream\n" % len(_CONTENT) + _CONTENT + b"endstream",
+    b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+])
 
 
 def docx(path: Path, body: str) -> Path:
